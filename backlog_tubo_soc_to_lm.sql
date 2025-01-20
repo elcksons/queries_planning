@@ -39,6 +39,8 @@ FROM spx_mart.dim_spx_station_br
 
 SELECT
 
+stu.actual_station_id as SoCId,
+stu.actual_station_name as SoCName,
   CASE 
        WHEN SUBSTRING(r.superior_code_hub, LENGTH(r.superior_code_hub), 1) = 'X' THEN SUBSTRING(r.superior_code_hub, 1, 10) ELSE r.superior_code_hub END AS station_code,
     
@@ -77,4 +79,4 @@ WHERE stu.latest_spx_tracking_code IN (8,9,33,15,630,36) -- inclui o 36 aqui
     AND sta.grass_region = 'BR'
 
 GROUP BY
-1,2,3
+1,2,3,4,5
