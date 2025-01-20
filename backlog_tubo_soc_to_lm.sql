@@ -78,3 +78,4 @@ WHERE stu.latest_spx_tracking_code IN (8,9,33,15,630,36) -- inclui o 36 aqui
 
 GROUP BY
 1,2,3
+--caos total pq não vai
