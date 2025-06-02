@@ -1,0 +1,120 @@
+ANÁLISE DETALHADA DA QUERY DE ANÁLISE DE SHIPMENTS
+===============================================
+
+VISÃO GERAL
+-----------
+Esta query foi desenvolvida para analisar o fluxo de shipments em uma estação específica (station_id = 5003), considerando janelas de tempo programadas e expandidas. A query utiliza Common Table Expressions (CTEs) para organizar e processar os dados de forma estruturada.
+
+ESTRUTURA DA QUERY
+-----------------
+
+1. BASE FILTRADA (base_filtrada)
+--------------------------------
+SELECT
+    CAST(station_id AS VARCHAR) AS station_id,
+    shipment_id,
+    data AS data_received,
+    CAST(REPLACE(DATE_FORMAT(datetime_received, '%H:%i'), ':', '') AS INT) AS hora_received,
+    datetime_received
+FROM dev_brbi_opslgc.di_hub_db_shipment_lm
+WHERE received_attempt = 1 
+  AND station_id = 5003 
+
+Características:
+- Filtra os dados da tabela di_hub_db_shipment_lm
+- Considera apenas tentativas de recebimento bem-sucedidas (received_attempt = 1)
+- Foca na estação específica (station_id = 5003)
+- Converte o horário de recebimento para um formato numérico (HHMM)
+
+2. JANELA PROCESSADA (janela_processada)
+---------------------------------------
+SELECT
+    CAST(station_id AS VARCHAR) AS station_id,
+    SUBSTRING(LPAD(labeling_start_time, 8, '0'), 1, 5) AS labeling_start_time,
+    SUBSTRING(LPAD(labeling_end_time, 8, '0'), 1, 5) AS labeling_end_time
+FROM brbi_opslgc.ops_clock_planning_2025
+WHERE labeling_start_time IS NOT NULL AND labeling_start_time != ''
+  AND labeling_end_time IS NOT NULL AND labeling_end_time != ''
+
+Características:
+- Obtém as janelas de tempo programadas da tabela ops_clock_planning_2025
+- Formata os horários de início e fim das janelas
+- Remove registros com horários inválidos
+
+3. JANELAS EXPANDIDAS (janelas_expandidas)
+----------------------------------------
+SELECT
+    jp.station_id,
+    CAST(REPLACE(jp.labeling_start_time, ':', '') AS INT) AS start_janela,
+    CAST(REPLACE(jp.labeling_end_time, ':', '') AS INT) AS end_janela,
+    ROW_NUMBER() OVER (
+        PARTITION BY jp.station_id
+        ORDER BY CAST(REPLACE(jp.labeling_start_time, ':', '') AS INT)
+    ) AS janela_num,
+    -- Ajustando para 1 hora antes
+    (CAST(REPLACE(jp.labeling_start_time, ':', '') AS INT)) - 100 AS inicio_expandido,
+    -- Ajustando para 1 hora depois
+    (CAST(REPLACE(jp.labeling_end_time, ':', '') AS INT)) + 100 AS fim_expandido
+
+Características:
+- Expande as janelas de tempo em 1 hora antes e depois
+- Numera as janelas sequencialmente
+- Formata os horários para exibição
+
+4. INTERVALOS DE 30 MINUTOS
+--------------------------
+- Divide cada janela em intervalos de 30 minutos
+- Considera casos especiais de janelas que cruzam a meia-noite
+- Gera 24 intervalos possíveis (0-23)
+
+5. CÁLCULO DE TOTAIS (totais_janela)
+----------------------------------
+- Calcula o total de shipments por janela
+- Considera tanto janelas expandidas quanto programadas
+
+6. SHIPMENTS POR INTERVALO
+------------------------
+- Contabiliza shipments por intervalo de 30 minutos
+- Considera tanto janelas expandidas quanto programadas
+
+7. SHIPMENTS FORA DAS JANELAS
+---------------------------
+- Identifica shipments que não se encaixam em nenhuma janela
+- Mantém o controle desses casos especiais
+
+RESULTADO FINAL
+--------------
+A query final combina todos os resultados e calcula:
+- Quantidade de shipments por intervalo
+- Percentual do total da janela expandida para cada intervalo
+  (exemplo: se a janela expandida tem 10.482 shipments e um intervalo recebeu 1.048 shipments, 
+   o percentual será 10% - representando a proporção que aquele intervalo representa do total da janela)
+- Ordenação por estação, data e janela
+- Tratamento especial para shipments fora das janelas
+
+Para calcular o percentual corretamente, a query:
+1. Primeiro calcula o total de shipments da janela expandida
+2. Para cada intervalo de 30 minutos, calcula:
+   (quantidade de shipments do intervalo * 100) / total de shipments da janela expandida
+3. O resultado mostra quanto cada intervalo representa do total da janela
+
+Exemplo prático:
+- Total da janela expandida: 10.482 shipments
+- Intervalo 08:00-08:30: 1.048 shipments
+- Cálculo: (1.048 * 100) / 10.482 = 10%
+- Significado: 10% dos shipments da janela foram recebidos neste intervalo
+
+CONSIDERAÇÕES IMPORTANTES
+------------------------
+1. A query lida com diferentes formatos de horário
+2. Considera casos especiais de janelas que cruzam a meia-noite
+3. Expande as janelas em 1 hora para análise mais abrangente
+4. Mantém rastreabilidade de shipments fora das janelas programadas
+
+USO DA QUERY
+-----------
+Esta query é útil para:
+- Análise de distribuição de shipments ao longo do dia
+- Identificação de picos de atividade
+- Verificação de aderência ao planejamento
+- Análise de eficiência operacional 

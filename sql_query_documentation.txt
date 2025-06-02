@@ -1,0 +1,81 @@
+Documentação da Consulta SQL - Análise de Janelas de Recebimento de Shipments
+
+1. VISÃO GERAL
+Esta consulta SQL analisa o recebimento de shipments em diferentes estações, calculando métricas importantes sobre janelas de tempo e distribuição de recebimentos.
+
+2. ESTRUTURA DA CONSULTA
+A consulta é composta por várias CTEs (Common Table Expressions) que processam os dados em etapas:
+
+2.1. base_filtrada
+- Filtra os dados base de shipments
+- Converte station_id para VARCHAR
+- Extrai hora do recebimento
+- Filtra apenas tentativas de recebimento = 1
+
+2.2. janela_processada
+- Obtém informações de janelas de tempo das estações
+- Processa horários de início e fim de labeling
+- Remove registros com horários nulos ou vazios
+
+2.3. janelas_expandidas
+- Expande as janelas de tempo em 100 minutos para cada lado
+- Trata casos especiais de virada de dia (horários próximos a 00:00)
+- Formata horários para exibição
+
+2.4. shipments_classificados
+- Classifica os shipments dentro ou fora das janelas expandidas
+- Calcula flags de classificação
+- Ajusta datas para casos de virada de dia
+
+2.5. shipments_dentro e shipments_fora
+- Separa shipments em duas categorias: dentro e fora das janelas
+- Mantém informações relevantes para cada categoria
+
+2.6. todos_shipments
+- Combina shipments dentro e fora das janelas
+
+2.7. intervalos_60min
+- Agrupa shipments em intervalos de 60 minutos
+- Extrai hora do recebimento para agrupamento
+
+2.8. agrupamento_completo
+- Agrupa dados por estação, data e intervalo
+- Calcula quantidade de shipments por intervalo
+
+2.9. totais_por_janela
+- Calcula totais de shipments por janela de recebimento
+
+2.10. percentual_acumulado
+- Calcula percentuais acumulados de shipments
+- Usado para identificar o percentil 80
+
+2.11. intervalo_percentil_80_base
+- Identifica o intervalo que contém 80% dos shipments
+
+3. RESULTADO FINAL
+A consulta retorna:
+- ID da estação
+- Data base da janela
+- Data/hora do recebimento
+- Janela de recebimento expandida
+- Janela programada
+- Intervalo de hora
+- Quantidade de shipments no intervalo
+- Total de shipments na janela
+- Percentual na janela
+- Duração do percentil 80 em minutos
+- Intervalo do percentil 80
+
+4. OBJETIVO
+Esta consulta tem como objetivo principal:
+- Analisar a distribuição de recebimentos de shipments
+- Identificar padrões de recebimento
+- Calcular métricas de performance
+- Ajudar no planejamento de capacidade
+- Identificar janelas de tempo mais críticas
+
+5. OBSERVAÇÕES IMPORTANTES
+- A consulta trata casos especiais de virada de dia
+- Considera uma margem de 100 minutos antes e depois das janelas programadas
+- Calcula o percentil 80 para identificar o intervalo que contém a maioria dos recebimentos
+- Permite análise por estação e por data 

@@ -1,0 +1,232 @@
+RESUMO EXECUTIVO
+
+Esta análise tem como objetivo monitorar e otimizar as operações de recebimento e despacho de shipments em estações logísticas, através da análise de janelas de tempo operacionais. A query processa dados de operações para:
+
+1. Identificar padrões de distribuição de volume dentro das janelas operacionais
+2. Calcular métricas de produtividade por operador
+3. Analisar a eficiência das operações comparando tempos programados vs. reais
+4. Identificar períodos de pico de atividade (curva de 5%)
+5. Avaliar o impacto de janelas que cruzam a meia-noite
+6. Fornecer insights para otimização de recursos e planejamento operacional
+
+A análise é dividida em duas partes principais:
+- Recebimento (Received): Foco nas operações de entrada de shipments
+- Despacho (Dispatch): Foco nas operações de saída de shipments
+
+Cada parte considera:
+- Janelas programadas vs. reais
+- Distribuição de volume por hora
+- Produtividade por operador
+- Duração das operações
+- Desvios do planejado
+
+Esta documentação detalha a estrutura da query, suas métricas e o racional por trás de cada componente.
+
+EXPLICAÇÃO DETALHADA DA QUERY DE ANÁLISE DE JANELAS
+
+1. CTE sort_codes
+- Objetivo: Padronizar e organizar os códigos das estações
+- Tratamentos:
+  * Converte station_id para BIGINT
+  * Trata casos especiais de estações XPT
+  * Remove estações inválidas ou inativas
+- Finalidade: Criar uma base consistente de identificação das estações
+
+2. CTE base_filtrada
+- Objetivo: Filtrar os dados de recebimento de shipments
+- Tratamentos:
+  * Converte station_id para VARCHAR
+  * Formata a hora do recebimento
+  * Filtra apenas shipments com received_attempt = 1
+  * Limita ao período dos últimos 30 dias
+- Finalidade: Criar base de dados limpa para análise de recebimentos
+
+3. CTE operadores_janela
+- Objetivo: Identificar operadores por janela de trabalho
+- Tratamentos:
+  * Converte station_id para VARCHAR
+  * Extrai data base da janela
+  * Filtra apenas registros com bin_received_attempt = 1
+- Finalidade: Mapear operadores ativos em cada janela
+
+4. CTE janela_processada
+- Objetivo: Processar horários das janelas de trabalho
+- Tratamentos:
+  * Padroniza formatos de horário
+  * Remove registros com horários inválidos
+  * Separa janelas de labeling e dispatching
+- Finalidade: Criar base de horários padronizados
+
+5. CTE janelas_expandidas
+- Objetivo: Expandir janelas para análise
+- Tratamentos:
+  * Calcula horários expandidos (antes e depois)
+  * Formata horários para exibição
+  * Cria labels para janelas programadas e expandidas
+- Finalidade: Facilitar análise de períodos antes e depois das janelas
+
+6. CTE shipments_classificados
+- Objetivo: Classificar shipments dentro das janelas
+- Tratamentos:
+  * Identifica shipments dentro da janela expandida
+  * Ajusta datas para janelas que cruzam meia-noite
+  * Calcula flag_dentro baseado nos horários
+- Finalidade: Identificar shipments dentro do período correto
+
+7. CTEs shipments_dentro e shipments_fora
+- Objetivo: Separar shipments por localização temporal
+- Tratamentos:
+  * Separa shipments dentro e fora das janelas
+  * Mantém informações de janela para análise
+- Finalidade: Permitir análise separada de shipments
+
+8. CTE agrupamento_completo
+- Objetivo: Agrupar dados por intervalo de hora
+- Tratamentos:
+  * Agrupa por station_id, data e janela
+  * Calcula quantidade de shipments por hora
+  * Mantém primeiro datetime de cada grupo
+- Finalidade: Criar base para análise temporal
+
+9. CTE totais_por_janela
+- Objetivo: Calcular totais por janela
+- Tratamentos:
+  * Soma total de shipments por janela
+  * Exclui registros fora da janela
+- Finalidade: Criar base para cálculos percentuais
+
+10. CTE percentuais_janela
+- Objetivo: Calcular percentuais de distribuição
+- Tratamentos:
+  * Calcula percentual de shipments por hora
+  * Mantém apenas registros dentro da janela
+- Finalidade: Identificar picos de atividade
+
+11. CTE curva_5_percent
+- Objetivo: Analisar curva de distribuição
+- Tratamentos:
+  * Identifica períodos com mais de 5% do total
+  * Calcula durações e totais
+  * Ajusta datas para janelas que cruzam meia-noite
+- Finalidade: Identificar períodos de maior atividade
+
+12. CTE operadores_por_janela
+- Objetivo: Contar operadores por janela
+- Tratamentos:
+  * Conta operadores distintos
+  * Considera janelas que cruzam meia-noite
+  * Ajusta datas para operadores em diferentes dias
+- Finalidade: Calcular produtividade por operador
+
+13. CTEs para Dispatch (base_filtrada_dispatch até curva_5_percent_dispatch)
+- Objetivo: Repetir análise para dispatch
+- Tratamentos:
+  * Similar aos CTEs de received, mas para dispatch
+  * Ajusta lógica para horários de dispatch
+  * Mantém consistência com análise de received
+- Finalidade: Permitir análise comparativa
+
+14. SELECT Final
+- Objetivo: Consolidar todas as análises
+- Tratamentos:
+  * Junta informações de received e dispatch
+  * Calcula métricas de produtividade
+  * Formata datas e horas
+  * Calcula durações em horas
+- Finalidade: Apresentar visão completa das operações
+
+MÉTRICAS PRINCIPAIS CALCULADAS:
+1. Duração total da janela (minutos e horas)
+2. Duração da curva de 5% (minutos e horas)
+3. Produtividade por operador
+4. Total de operadores por janela
+5. Diferença entre duração real e programada
+6. Percentuais de distribuição
+
+AJUSTES ESPECIAIS:
+1. Tratamento de janelas que cruzam meia-noite
+2. Ajuste de datas para operadores em diferentes dias
+3. Cálculo correto de durações considerando mudança de dia
+4. Formatação consistente de horários
+5. Tratamento de casos especiais de estações
+
+DETALHAMENTO DAS COLUNAS DO RESULTADO FINAL:
+
+1. Colunas de Identificação:
+   - station_id: Identificador único da estação
+   - data_base_janela: Data base para análise da janela
+   - janela_programada_received: Horário programado da janela de recebimento
+   - janela_programada_dispatch: Horário programado da janela de dispatch
+
+2. Colunas de Totalização:
+   - total_da_janela_received: Total de shipments recebidos na janela
+   - total_da_curva_received: Total de shipments na curva de 5%
+   - total_da_janela_dispatch: Total de shipments despachados na janela
+   - total_da_curva_dispatch: Total de shipments na curva de 5% do dispatch
+
+3. Colunas de Duração:
+   - duracao_minutos_janela_received: Duração total da janela de recebimento em minutos
+   - duracao_horas_janela_received: Duração total da janela de recebimento em horas
+   - duracao_minutos_curva_received: Duração da curva de 5% em minutos
+   - duracao_horas_curva_received: Duração da curva de 5% em horas
+   - duracao_minutos_janela_dispatch: Duração total da janela de dispatch em minutos
+   - duracao_horas_janela_dispatch: Duração total da janela de dispatch em horas
+   - duracao_minutos_curva_dispatch: Duração da curva de 5% do dispatch em minutos
+   - duracao_horas_curva_dispatch: Duração da curva de 5% do dispatch em horas
+
+4. Colunas de Datetime:
+   - datetime_inicio_real_received: Primeiro datetime de recebimento na janela
+   - datetime_fim_real_received: Último datetime de recebimento na janela
+   - datetime_inicio_real_dispatch: Primeiro datetime de dispatch na janela
+   - datetime_fim_real_dispatch: Último datetime de dispatch na janela
+
+5. Colunas de Operadores:
+   - qtd_operadores_received: Quantidade de operadores na janela de recebimento
+   - qtd_operadores_dispatch: Quantidade de operadores na janela de dispatch
+
+6. Colunas de Produtividade:
+   - produtividade_por_operador_received: Média de shipments por operador na janela de recebimento
+   - produtividade_por_operador_dispatch: Média de shipments por operador na janela de dispatch
+
+7. Colunas de Diferença:
+   - diferenca_duracao_janela_received: Diferença entre duração real e programada da janela de recebimento
+   - diferenca_duracao_curva_received: Diferença entre duração real e programada da curva de 5% de recebimento
+   - diferenca_duracao_janela_dispatch: Diferença entre duração real e programada da janela de dispatch
+   - diferenca_duracao_curva_dispatch: Diferença entre duração real e programada da curva de 5% de dispatch
+
+RACIONAL DE CADA COLUNA:
+
+1. Colunas de Identificação:
+   - Permitem identificar unicamente cada registro e sua janela de tempo
+   - Facilitam o agrupamento e análise por estação e período
+   - Mantêm a referência dos horários programados para comparação
+
+2. Colunas de Totalização:
+   - Fornecem visão do volume total de operações
+   - Permitem comparar volumes entre janelas e curvas
+   - Ajudam a identificar picos de atividade
+
+3. Colunas de Duração:
+   - Permitem analisar o tempo real de operação
+   - Facilitam a comparação entre janelas programadas e reais
+   - Ajudam a identificar eficiência operacional
+
+4. Colunas de Datetime:
+   - Registram o período real de operação
+   - Permitem análise de distribuição temporal
+   - Facilitam identificação de atrasos ou antecipações
+
+5. Colunas de Operadores:
+   - Permitem análise de recursos humanos
+   - Facilitam cálculo de produtividade
+   - Ajudam no dimensionamento de equipes
+
+6. Colunas de Produtividade:
+   - Medem a eficiência operacional
+   - Permitem comparação entre períodos
+   - Ajudam na identificação de oportunidades de melhoria
+
+7. Colunas de Diferença:
+   - Identificam desvios entre planejado e realizado
+   - Permitem análise de eficiência
+   - Facilitam a identificação de problemas operacionais 

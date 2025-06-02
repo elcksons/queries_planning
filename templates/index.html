@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Planilha</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/datatables@1.10.18/media/css/jquery.dataTables.min.css" rel="stylesheet">
+    <style>
+        .loading {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.8);
+            z-index: 1000;
+        }
+        .loading-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="mb-4">Gerenciador de Planilha</h1>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="text" id="spreadsheetUrl" class="form-control" placeholder="URL da Planilha">
+                    <button class="btn btn-primary" onclick="loadData()">Carregar</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="text" id="sheetName" class="form-control" placeholder="Nome da Aba (opcional)">
+                </div>
+            </div>
+        </div>
+
+        <div class="table-responsive">
+            <table id="dataTable" class="table table-striped">
+                <thead>
+                    <tr id="headerRow"></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mt-3">
+            <div>
+                <select id="perPage" class="form-select" onchange="loadData()">
+                    <option value="10">10 por página</option>
+                    <option value="25">25 por página</option>
+                    <option value="50" selected>50 por página</option>
+                    <option value="100">100 por página</option>
+                </select>
+            </div>
+            <nav>
+                <ul class="pagination" id="pagination"></ul>
+            </nav>
+        </div>
+    </div>
+
+    <div class="loading">
+        <div class="loading-content">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Carregando...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/datatables@1.10.18/media/js/jquery.dataTables.min.js"></script>
+    <script>
+        let currentPage = 1;
+        let totalPages = 1;
+
+        function showLoading() {
+            $('.loading').show();
+        }
+
+        function hideLoading() {
+            $('.loading').hide();
+        }
+
+        function loadData() {
+            showLoading();
+            const spreadsheetUrl = $('#spreadsheetUrl').val();
+            const sheetName = $('#sheetName').val();
+            const perPage = $('#perPage').val();
+
+            $.get('/api/data', {
+                spreadsheet_url: spreadsheetUrl,
+                sheet_name: sheetName,
+                page: currentPage,
+                per_page: perPage
+            })
+            .done(function(response) {
+                if (response.error) {
+                    alert('Erro: ' + response.error);
+                    return;
+                }
+
+                // Update table
+                const headers = Object.keys(response.data[0] || {});
+                $('#headerRow').empty();
+                headers.forEach(header => {
+                    $('#headerRow').append(`<th>${header}</th>`);
+                });
+
+                $('tbody').empty();
+                response.data.forEach((row, index) => {
+                    const tr = $('<tr>');
+                    headers.forEach(header => {
+                        tr.append(`<td contenteditable="true" data-field="${header}" data-row="${index}">${row[header]}</td>`);
+                    });
+                    $('tbody').append(tr);
+                });
+
+                // Update pagination
+                totalPages = response.total_pages;
+                updatePagination();
+            })
+            .fail(function(error) {
+                alert('Erro ao carregar dados: ' + error.responseText);
+            })
+            .always(function() {
+                hideLoading();
+            });
+        }
+
+        function updatePagination() {
+            const pagination = $('#pagination');
+            pagination.empty();
+
+            // Previous button
+            pagination.append(`
+                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="changePage(${currentPage - 1})">Anterior</a>
+                </li>
+            `);
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                pagination.append(`
+                    <li class="page-item ${currentPage === i ? 'active' : ''}">
+                        <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+                    </li>
+                `);
+            }
+
+            // Next button
+            pagination.append(`
+                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="changePage(${currentPage + 1})">Próxima</a>
+                </li>
+            `);
+        }
+
+        function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            loadData();
+        }
+
+        // Handle cell edits
+        $(document).on('blur', 'td[contenteditable="true"]', function() {
+            const field = $(this).data('field');
+            const rowIndex = $(this).data('row');
+            const newValue = $(this).text();
+            const spreadsheetUrl = $('#spreadsheetUrl').val();
+            const sheetName = $('#sheetName').val();
+
+            $.ajax({
+                url: '/api/update',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    spreadsheet_url: spreadsheetUrl,
+                    sheet_name: sheetName,
+                    row_data: { [field]: newValue },
+                    row_index: rowIndex
+                })
+            })
+            .done(function(response) {
+                if (response.error) {
+                    alert('Erro ao atualizar: ' + response.error);
+                    loadData(); // Reload data to revert changes
+                }
+            })
+            .fail(function(error) {
+                alert('Erro ao atualizar: ' + error.responseText);
+                loadData(); // Reload data to revert changes
+            });
+        });
+    </script>
+</body>
+</html> 
