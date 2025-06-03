@@ -51,7 +51,7 @@ janela_processada AS (
         SUBSTRING(LPAD(labeling_end_time,8,'0'),1,5) AS labeling_end_time,
         SUBSTRING(LPAD(dispatching_start_time_fleet,8,'0'),1,5) AS dispatching_start_time,
         SUBSTRING(LPAD(dispatching_end_time_fleet,8,'0'),1,5) AS dispatching_end_time
-    FROM brbi_opslgc.ops_clock_planning_2025
+    FROM brbi_opslgc.ds_ops_clock_planning
     WHERE (labeling_start_time IS NOT NULL AND labeling_start_time <> '')
       AND (labeling_end_time IS NOT NULL AND labeling_end_time <> '')
       AND (dispatching_start_time_fleet IS NOT NULL AND dispatching_start_time_fleet <> '')
@@ -515,8 +515,8 @@ SELECT DISTINCT
     END AS diferenca_duracao_curva_received,
     -- Produtividade pela curva
     CAST(FLOOR((CAST(c.total_da_curva_received AS DOUBLE) / NULLIF(c.duracao_curva, 0)) * 60) AS INTEGER) AS produtividade_curva_received,
+    CAST(FLOOR((CAST(p.total_da_janela_received AS DOUBLE) / NULLIF(c.total_minutos_real_received, 0)) * 60) AS INTEGER) AS produtividade_real_received,
     o.total_distinto_operadores AS total_operadores_received,
-    CAST(FLOOR(CAST(c.total_da_curva_received AS DOUBLE) / NULLIF(o.total_distinto_operadores, 0)) AS INTEGER) AS produtividade_por_operador_curva_received,
     pd.janela_programada_dispatch,
     pd.janela_expandida_dispatch,
     pd.total_da_janela_dispatch,
@@ -536,6 +536,7 @@ SELECT DISTINCT
     END AS diferenca_duracao_curva_dispatch,
     -- Produtividade pela curva
     CAST(FLOOR((CAST(cd.total_da_curva_received_dispatch AS DOUBLE) / NULLIF(cd.duracao_curva_dispatch, 0)) * 60) AS INTEGER) AS produtividade_curva_dispatch,
+    CAST(FLOOR((CAST(pd.total_da_janela_dispatch AS DOUBLE) / NULLIF(cd.total_minutos_real_dispatch, 0)) * 60) AS INTEGER) AS produtividade_real_dispatch,
     (
         SELECT COUNT(DISTINCT o2.operator_name)
         FROM operadores_janela o2
@@ -545,17 +546,7 @@ SELECT DISTINCT
             CAST(pd.data_base_janela AS TIMESTAMP) + INTERVAL '1' HOUR * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '^(\d{2}):', 1) AS INTEGER) + INTERVAL '1' MINUTE * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '^(\d{2}):(\d{2})', 2) AS INTEGER)
             AND 
             CAST(pd.data_base_janela AS TIMESTAMP) + INTERVAL '1' HOUR * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '(\d{2}):\d{2}$', 1) AS INTEGER) + INTERVAL '1' MINUTE * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '(\d{2}):(\d{2})$', 2) AS INTEGER)
-    ) AS operadores_dispatch,
-    CAST(FLOOR(CAST(cd.total_da_curva_received_dispatch AS DOUBLE) / NULLIF((
-        SELECT COUNT(DISTINCT o2.operator_name)
-        FROM operadores_janela o2
-        WHERE o2.station_id = pd.station_id
-        AND o2.data_base_janela = pd.data_base_janela
-        AND o2.datetime_received BETWEEN 
-            CAST(pd.data_base_janela AS TIMESTAMP) + INTERVAL '1' HOUR * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '^(\d{2}):', 1) AS INTEGER) + INTERVAL '1' MINUTE * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '^(\d{2}):(\d{2})', 2) AS INTEGER)
-            AND 
-            CAST(pd.data_base_janela AS TIMESTAMP) + INTERVAL '1' HOUR * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '(\d{2}):\d{2}$', 1) AS INTEGER) + INTERVAL '1' MINUTE * CAST(REGEXP_EXTRACT(pd.janela_programada_dispatch, '(\d{2}):(\d{2})$', 2) AS INTEGER)
-    ), 0)) AS INTEGER) AS produtividade_por_operador_curva_dispatch
+    ) AS operadores_dispatch
 FROM percentuais_janela p
 LEFT JOIN curva_5_percent c
     ON p.station_id = c.station_id
