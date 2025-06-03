@@ -1,6 +1,7 @@
 --CREATE TABLE IF NOT EXISTS ops_clock_lm_v1_received_dispatch_fleet AS
 --DROP TABLE  ops_clock_lm_v1_received_dispatch_fleet;
 /* AINDA EM TESTE NO GIT */
+/*mais um teste de git*/
 DELETE FROM ops_clock_lm_v1_received_dispatch_fleet;
 INSERT INTO ops_clock_lm_v1_received_dispatch_fleet
 
