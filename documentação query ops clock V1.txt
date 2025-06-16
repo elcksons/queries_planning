@@ -1,0 +1,322 @@
+# Documentação Técnica - Análise de Produtividade por Curva (OPS Clock V1)
+
+## 1. CTEs de Base e Configuração
+
+### `sort_codes`
+```sql
+WITH sort_codes AS (
+    SELECT
+    CAST(station_id AS BIGINT) AS station_id,
+    regional AS lm_regional,
+    sub_regional,
+    superior_station_code,
+    station_name,
+    station_code AS code_name,
+    CASE
+        WHEN SUBSTRING(station_code, 1, 3) = 'XPT' THEN
+            CASE
+                WHEN SUBSTRING(superior_station_code, LENGTH(superior_station_code), 1) = 'X'
+                THEN SUBSTRING(superior_station_code, 1, 10)
+                ELSE superior_station_code
+            END
+        ELSE station_code
+    END AS superior_code_hub
+```
+**Propósito**: Normaliza e estrutura os códigos das estações, com tratamento especial para estações XPT.
+- Converte station_id para BIGINT
+- Trata casos especiais de estações XPT
+- Remove estações inativas ou inválidas
+
+### `base_filtrada`
+```sql
+base_filtrada AS (
+    SELECT
+        CAST(station_id AS VARCHAR) AS station_id,
+        shipment_id,
+        data AS data_received,
+        CAST(REPLACE(date_format(datetime_received,'%H:%i'),':','') AS INT) AS hora_received,
+        datetime_received
+    FROM dev_brbi_opslgc.di_hub_db_shipment_lm
+    WHERE 1=1 and bin_received_attempt = 1 and received_attempt = 1
+    AND data BETWEEN CURRENT_DATE - INTERVAL '30' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+)
+```
+**Propósito**: Filtra os dados base de recebimento.
+- Considera apenas tentativas bem-sucedidas de recebimento
+- Limita ao período dos últimos 30 dias
+- Normaliza o formato da hora para comparação
+
+## 2. CTEs de Janelas e Operadores
+
+### `operadores_janela`
+```sql
+operadores_janela AS (
+    SELECT DISTINCT
+        CAST(station_id AS VARCHAR) AS station_id,
+        DATE(datetime) AS data_base_janela,
+        datetime AS datetime_received,
+        operator_name
+    FROM dev_brbi_opslgc.di_hub_order_tracking_lm_volume
+    WHERE 1=1 AND bin_received_attempt = 1
+)
+```
+**Propósito**: Identifica operadores ativos por janela.
+- Mapeia operadores por estação e data
+- Considera apenas tentativas bem-sucedidas
+
+### `janela_processada`
+```sql
+janela_processada AS (
+    SELECT DISTINCT
+        CAST(station_id AS VARCHAR) AS station_id,
+        SUBSTRING(LPAD(labeling_start_time,8,'0'),1,5) AS labeling_start_time,
+        SUBSTRING(LPAD(labeling_end_time,8,'0'),1,5) AS labeling_end_time,
+        SUBSTRING(LPAD(dispatching_start_time_fleet,8,'0'),1,5) AS dispatching_start_time,
+        SUBSTRING(LPAD(dispatching_end_time_fleet,8,'0'),1,5) AS dispatching_end_time
+    FROM brbi_opslgc.ops_clock_planning_2025
+    WHERE (labeling_start_time IS NOT NULL AND labeling_start_time <> '')
+      AND (labeling_end_time IS NOT NULL AND labeling_end_time <> '')
+      AND (dispatching_start_time_fleet IS NOT NULL AND dispatching_start_time_fleet <> '')
+      AND (dispatching_end_time_fleet IS NOT NULL AND dispatching_end_time_fleet <> '')
+)
+```
+**Propósito**: Processa e normaliza as janelas de operação.
+- Formata horários de início e fim
+- Remove registros com janelas inválidas
+- Separa janelas de recebimento e despacho
+
+### `janelas_expandidas`
+```sql
+janelas_expandidas AS (
+    SELECT
+        jp.station_id,
+        jp.labeling_start_time,
+        jp.labeling_end_time,
+        jp.dispatching_start_time,
+        jp.dispatching_end_time,
+        TRY_CAST(REPLACE(jp.labeling_start_time,':','') AS INT) AS start_janela,
+        TRY_CAST(REPLACE(jp.labeling_end_time,':','') AS INT) AS end_janela,
+        CASE
+            WHEN TRY_CAST(REPLACE(jp.labeling_start_time,':','') AS INT) < 100 THEN 2330
+            ELSE TRY_CAST(REPLACE(jp.labeling_start_time,':','') AS INT) - 100
+        END AS inicio_expandido,
+        ...
+)
+```
+**Propósito**: Expande as janelas de operação.
+- Adiciona buffer de 100 minutos antes e depois
+- Trata casos especiais de janelas que cruzam a meia-noite
+- Formata horários para comparação
+
+## 3. CTEs de Classificação de Shipments
+
+### `shipments_classificados`
+```sql
+shipments_classificados AS (
+    SELECT
+        bf.station_id,
+        bf.shipment_id,
+        bf.datetime_received,
+        bf.data_received,
+        bf.hora_received,
+        j.inicio_expandido,
+        j.fim_expandido,
+        j.start_janela,
+        j.end_janela,
+        ...
+        CASE
+            WHEN j.inicio_expandido > j.fim_expandido THEN
+                CASE 
+                    WHEN bf.hora_received >= j.inicio_expandido OR bf.hora_received <= j.fim_expandido THEN 1
+                    ELSE 0
+                END
+            ELSE
+                CASE 
+                    WHEN bf.hora_received BETWEEN j.inicio_expandido AND j.fim_expandido THEN 1
+                    ELSE 0
+                END
+        END AS flag_dentro
+)
+```
+**Propósito**: Classifica shipments dentro/fora das janelas.
+- Identifica shipments dentro da janela expandida
+- Trata casos especiais de janelas que cruzam a meia-noite
+- Calcula flag de classificação
+
+### `shipments_dentro` e `shipments_fora`
+```sql
+shipments_dentro AS (
+    SELECT
+        station_id,
+        shipment_id,
+        data_janela AS data_base_janela,
+        datetime_received,
+        janela_recebimento_expandida,
+        janela_programada_received,
+        janela_expandida_received
+    FROM shipments_classificados
+    WHERE flag_dentro = 1
+)
+```
+**Propósito**: Separa shipments por classificação.
+- `shipments_dentro`: shipments dentro da janela
+- `shipments_fora`: shipments fora da janela
+- Mantém informações de janela para análise
+
+## 4. CTEs de Agregação e Cálculos
+
+### `agrupamento_completo`
+```sql
+agrupamento_completo AS (
+    SELECT
+        station_id,
+        data_base_janela,
+        janela_recebimento_expandida,
+        janela_programada_received,
+        janela_expandida_received,
+        HOUR(datetime_received) AS intervalo_chave,
+        MIN(datetime_received) AS datetime_received,
+        COUNT(DISTINCT shipment_id) AS qtd_shipments_60min
+    FROM todos_shipments
+    GROUP BY station_id, data_base_janela, janela_recebimento_expandida, janela_programada_received, janela_expandida_received, HOUR(datetime_received)
+)
+```
+**Propósito**: Agrupa shipments por intervalo.
+- Agrupa por hora
+- Calcula quantidade de shipments por intervalo
+- Mantém referência temporal
+
+### `totais_por_janela`
+```sql
+totais_por_janela AS (
+    SELECT
+        station_id,
+        data_base_janela,
+        janela_recebimento_expandida,
+        janela_programada_received,
+        janela_expandida_received,
+        SUM(qtd_shipments_60min) AS total_da_janela_received
+    FROM agrupamento_completo
+    WHERE janela_recebimento_expandida <> 'fora da janela'
+    GROUP BY station_id, data_base_janela, janela_recebimento_expandida, janela_programada_received, janela_expandida_received
+)
+```
+**Propósito**: Calcula totais por janela.
+- Soma shipments por janela
+- Exclui registros fora da janela
+- Mantém estrutura hierárquica
+
+## 5. CTEs de Análise de Produtividade
+
+### `percentuais_janela`
+```sql
+percentuais_janela AS (
+    SELECT
+        a.station_id,
+        a.data_base_janela,
+        a.janela_recebimento_expandida,
+        a.janela_programada_received,
+        a.janela_expandida_received,
+        a.datetime_received,
+        a.intervalo_chave,
+        a.qtd_shipments_60min,
+        t.total_da_janela_received,
+        ROUND(100.0 * a.qtd_shipments_60min / t.total_da_janela_received, 2) AS percentual_janela
+    FROM agrupamento_completo a
+    JOIN totais_por_janela t
+        ON a.station_id = t.station_id
+        AND a.data_base_janela = t.data_base_janela
+        AND a.janela_recebimento_expandida = t.janela_recebimento_expandida
+    WHERE a.janela_recebimento_expandida <> 'fora da janela'
+)
+```
+**Propósito**: Calcula percentuais por intervalo.
+- Calcula percentual de shipments por intervalo
+- Mantém referência ao total da janela
+- Exclui registros fora da janela
+
+### `curva_5_percent`
+```sql
+curva_5_percent AS (
+    SELECT
+        station_id,
+        data_base_janela,
+        janela_recebimento_expandida,
+        janela_programada_received,
+        janela_expandida_received,
+        MIN(datetime_received) AS datetime_inicio_da_janela_real,
+        MAX(datetime_received) AS hora_fim_curva_5_percent,
+        date_diff('minute', MIN(datetime_received), MAX(datetime_received)) AS total_minutos_real_received,
+        SUM(CASE WHEN percentual_janela > 5 THEN qtd_shipments_60min ELSE 0 END) AS total_da_curva_received,
+        ...
+)
+```
+**Propósito**: Analisa curva de produtividade.
+- Identifica intervalos com mais de 5% do volume
+- Calcula durações e totais
+- Determina início e fim da curva
+
+## 6. CTEs de Despacho (Estrutura Similar)
+
+A query repete a mesma estrutura para análise de despacho, com CTEs específicas:
+- `base_filtrada_dispatch`
+- `shipments_classificados_dispatch`
+- `shipments_dentro_dispatch`
+- `intervalos_60min_dispatch`
+- `agrupamento_completo_dispatch`
+- `totais_por_janela_dispatch`
+- `percentuais_janela_dispatch`
+- `curva_5_percent_dispatch`
+
+## 7. Query Final
+
+A query final faz o JOIN de todas as CTEs para apresentar:
+- Métricas de recebimento
+- Métricas de despacho
+- Informações de operadores
+- Cálculos de produtividade
+- Durações e diferenças
+- Totais e percentuais
+
+## 8. Principais Métricas Calculadas
+
+1. **Produtividade pela Curva**
+   - Calculada considerando apenas intervalos com mais de 5% do volume total
+   - Fórmula: (total_da_curva / duracao_curva) * 60
+
+2. **Produtividade Real**
+   - Calculada considerando todo o período de operação
+   - Fórmula: (total_da_janela / total_minutos_real) * 60
+
+3. **Durações**
+   - Duração real: tempo total de operação
+   - Duração da curva: tempo dos intervalos mais produtivos
+   - Diferença: duração_curva - duração_real
+
+4. **Totais**
+   - Total da janela: soma de todos os shipments na janela
+   - Total da curva: soma dos shipments nos intervalos mais produtivos
+   - Total de operadores: contagem de operadores distintos por janela
+
+## 9. Considerações Importantes
+
+1. **Tratamento de Janelas**
+   - Janelas expandidas: +100 minutos antes e depois
+   - Casos especiais de janelas que cruzam a meia-noite
+   - Classificação "entre janelas" para registros entre janelas programadas
+
+2. **Filtros Principais**
+   - Período: últimos 30 dias
+   - Tentativas bem-sucedidas apenas
+   - Janelas válidas (não nulas e não vazias)
+
+3. **Agregações**
+   - Por hora (intervalo_chave)
+   - Por estação
+   - Por data base
+   - Por janela programada
+
+4. **Cálculos de Percentual**
+   - Base: total da janela
+   - Threshold: 5% para curva de produtividade
+   - Arredondamento: 2 casas decimais 
